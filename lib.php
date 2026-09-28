@@ -22,6 +22,56 @@ function config(string $key, $default = null)
     return UPWEB_CONFIG[$key] ?? $default;
 }
 
+function authToken(): ?string
+{
+    $token = (string)config('auth_token', '');
+    return $token !== '' ? $token : null;
+}
+
+function providedToken(): string
+{
+    $token = (string)($_REQUEST['token'] ?? '');
+    if ($token === '') {
+        $token = (string)($_SERVER['HTTP_X_UPWEB_TOKEN'] ?? '');
+    }
+    return $token;
+}
+
+function isLocalRequest(): bool
+{
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    if ($remote === '') {
+        return true;
+    }
+    return in_array($remote, ['127.0.0.1', '::1', '::ffff:127.0.0.1'], true);
+}
+
+/**
+ * Devuelve null si la peticion esta autorizada, o un mensaje de error.
+ * Reglas: el token (si esta configurado) es obligatorio para todos;
+ * sin token configurado solo se admite acceso local.
+ */
+function authError(): ?string
+{
+    $token = authToken();
+    $provided = providedToken();
+
+    if (isLocalRequest()) {
+        if ($token === null) {
+            return null;
+        }
+        return hash_equals($token, $provided) ? null : 'Token requerido';
+    }
+
+    if (!UPWEB_ALLOW_REMOTE) {
+        return 'Solo acceso local';
+    }
+    if ($token === null) {
+        return 'Acceso remoto deshabilitado: configura "auth_token" en config.local.php';
+    }
+    return hash_equals($token, $provided) ? null : 'Token invalido';
+}
+
 function composerPhar(): string
 {
     $configured = config('composer_phar');
@@ -189,7 +239,14 @@ function readJsonFile(string $file): ?array
     if (!is_file($file)) {
         return null;
     }
-    $data = json_decode((string)@file_get_contents($file), true);
+    $raw = (string)@file_get_contents($file);
+    if ($raw === '') {
+        return null;
+    }
+    if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) {
+        $raw = substr($raw, 3);
+    }
+    $data = json_decode($raw, true);
     return is_array($data) ? $data : null;
 }
 
@@ -463,13 +520,180 @@ function detectRunners(string $path): array
     return $runners;
 }
 
+function freshMapFor(int ...$pids): array
+{
+    $map = processParentMap();
+    if ($map === []) {
+        return $map;
+    }
+    static $tried = [];
+    static $refreshes = 0;
+    if ($refreshes >= 5) {
+        return $map;
+    }
+    foreach ($pids as $pid) {
+        if ($pid <= 0 || isset($map[$pid]) || isset($tried[$pid])) {
+            continue;
+        }
+        $tried[$pid] = true;
+        $refreshes++;
+        $map = processParentMap(true);
+        break;
+    }
+    return $map;
+}
+
 function isRunning(int $pid): bool
 {
     if ($pid <= 0) {
         return false;
     }
-    $out = @shell_exec('tasklist /FI "PID eq ' . $pid . '" /NH /FO CSV 2>NUL');
-    return is_string($out) && strpos($out, (string)$pid) !== false;
+    $map = freshMapFor($pid);
+    if ($map !== []) {
+        return isset($map[$pid]);
+    }
+    if (isWindows()) {
+        $out = @shell_exec('tasklist /FI "PID eq ' . $pid . '" /NH /FO CSV 2>NUL');
+        return is_string($out) && strpos($out, (string)$pid) !== false;
+    }
+    return @posix_kill($pid, 0) || (bool)@shell_exec('ps -p ' . $pid . ' -o pid= 2>/dev/null');
+}
+
+function isWindows(): bool
+{
+    return DIRECTORY_SEPARATOR === '\\';
+}
+
+function isMac(): bool
+{
+    return !isWindows() && PHP_OS_FAMILY === 'Darwin';
+}
+
+function shellQuote(string $value): string
+{
+    if (isWindows()) {
+        return '"' . str_replace('"', '""', $value) . '"';
+    }
+    return escapeshellarg($value);
+}
+
+function processParentMap(bool $refresh = false): array
+{
+    static $map = null;
+    if ($map !== null && !$refresh) {
+        return $map;
+    }
+    $map = [];
+    if (isWindows()) {
+        $ps = 'Get-CimInstance Win32_Process | ForEach-Object { @($_.ProcessId, $_.ParentProcessId) -join [char]58 }';
+        $out = (string)@shell_exec('powershell -NoProfile -Command "' . $ps . '"');
+    } else {
+        $out = (string)@shell_exec('ps -eo pid=,ppid= 2>/dev/null');
+    }
+    foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+        if (isWindows()) {
+            if (preg_match('/^(\d+):(\d+)$/', $line, $m)) {
+                $map[(int)$m[1]] = (int)$m[2];
+            }
+        } else {
+            if (preg_match('/^(\d+)\s+(\d+)$/', $line, $m)) {
+                $map[(int)$m[1]] = (int)$m[2];
+            }
+        }
+    }
+    return $map;
+}
+
+function isProcessTreeMember(int $pid, int $root, bool $refresh = false): bool
+{
+    if ($pid <= 0 || $root <= 0) {
+        return false;
+    }
+    if ($pid === $root) {
+        return true;
+    }
+    $map = $refresh ? processParentMap(true) : freshMapFor($pid);
+    $current = $pid;
+    for ($i = 0; $i < 50; $i++) {
+        $ppid = $map[$current] ?? 0;
+        if ($ppid <= 0 || $ppid === $current) {
+            return false;
+        }
+        if ($ppid === $root) {
+            return true;
+        }
+        $current = $ppid;
+    }
+    return false;
+}
+
+function portInUse(int $port, string $host = '127.0.0.1', bool $refresh = false): ?int
+{
+    if ($port < 1 || $port > 65535) {
+        return null;
+    }
+    static $cache = null;
+    if ($cache === null || $refresh) {
+        if (isWindows()) {
+            $out = (string)@shell_exec('netstat -ano -p tcp 2>NUL');
+        } else {
+            $out = (string)@shell_exec('netstat -ano -p tcp 2>/dev/null || true');
+        }
+        $rows = [];
+        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+            if (preg_match('/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)/i', $line, $m)) {
+                $rows[] = [(string)$m[1], (int)$m[2], (int)$m[3]];
+            }
+        }
+        $cache = $rows;
+    }
+
+    foreach ($cache as [$addr, $p, $pid]) {
+        if ($p !== $port) {
+            continue;
+        }
+        if ($host === '0.0.0.0') {
+            return $pid;
+        }
+        if ($addr === '127.0.0.1' || $addr === '::1' || $addr === '::') {
+            return $pid;
+        }
+    }
+    return null;
+}
+
+function findFreePort(int $preferred, string $host = '127.0.0.1'): int
+{
+    $port = $preferred;
+    for ($i = 0; $i < 40; $i++, $port++) {
+        if ($port > 65535) {
+            $port = 1024;
+        }
+        if (portInUse($port, $host) === null) {
+            return $port;
+        }
+    }
+    return $preferred;
+}
+
+function killProcess(int $pid): bool
+{
+    if ($pid <= 0) {
+        return false;
+    }
+    if (isWindows()) {
+        @shell_exec('taskkill /PID ' . $pid . ' /T /F 2>NUL');
+    } else {
+        @shell_exec('kill -9 ' . $pid . ' 2>/dev/null');
+        @shell_exec('pkill -9 -P ' . $pid . ' 2>/dev/null');
+    }
+    usleep(300000);
+    processParentMap(true);
+    return !isRunning($pid);
 }
 
 function detectUrl(string $logFile): ?string
@@ -505,8 +729,12 @@ function detectUrl(string $logFile): ?string
     ];
     foreach ($patterns as $pattern) {
         if (preg_match_all($pattern, $tail, $m) && !empty($m[0])) {
-            foreach (array_reverse($m[0]) as $candidate) {
+            $groups = $m[1] ?? $m[0];
+            foreach (array_reverse($groups) as $candidate) {
                 $candidate = rtrim(trim((string)$candidate), '.,;');
+                if ($candidate === '' || stripos($candidate, 'http') !== 0) {
+                    continue;
+                }
                 $avoid = static function (string $needle) use ($logDir): bool {
                     return is_file($logDir . DIRECTORY_SEPARATOR . $needle);
                 };
@@ -652,27 +880,54 @@ function detectTech(string $path): array
     return $tech;
 }
 
+function processNames(): array
+{
+    static $names = null;
+    if ($names !== null) {
+        return $names;
+    }
+    $names = [];
+    if (isWindows()) {
+        $out = (string)@shell_exec('tasklist /NH /FO CSV 2>NUL');
+        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+            if (preg_match('/^"([^"]+)"/', $line, $m)) {
+                $names[] = strtolower($m[1]);
+            }
+        }
+    } else {
+        $out = (string)@shell_exec('ps -eo comm= 2>/dev/null');
+        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+            $line = trim($line);
+            if ($line !== '') {
+                $names[] = strtolower(basename($line));
+            }
+        }
+    }
+    return $names;
+}
+
 function servicesStatus(): array
 {
     $services = [
-        'Apache' => ['httpd.exe', 'httpd2.exe'],
-        'nginx' => ['nginx.exe'],
-        'MySQL' => ['mysqld.exe', 'mysqld-nt.exe'],
-        'Redis' => ['redis-server.exe', 'redis-server.exe'],
-        'Memcached' => ['memcached.exe'],
-        'Node' => ['node.exe'],
-        'Docker' => ['docker.exe', 'dockerd.exe'],
-        'Flutter' => ['flutter.exe', 'dart.exe'],
+        'Apache' => ['httpd', 'apache2', 'httpd2'],
+        'nginx' => ['nginx'],
+        'MySQL' => ['mysqld', 'mysqld-nt'],
+        'Redis' => ['redis-server'],
+        'Memcached' => ['memcached'],
+        'Node' => ['node'],
+        'Docker' => ['dockerd', 'docker'],
+        'Flutter' => ['flutter', 'dart'],
     ];
-    $out = (string)@shell_exec('tasklist /NH /FO CSV 2>NUL');
-    $lower = strtolower($out);
+    $names = processNames();
     $status = [];
-    foreach ($services as $label => $processes) {
+    foreach ($services as $label => $procesos) {
         $running = false;
-        foreach ($processes as $proc) {
-            if (strpos($lower, '"' . strtolower($proc) . '"') !== false) {
-                $running = true;
-                break;
+        foreach ($procesos as $proc) {
+            foreach ($names as $name) {
+                if ($name === $proc || strpos($name, $proc . '.') === 0) {
+                    $running = true;
+                    break 2;
+                }
             }
         }
         $status[] = ['name' => $label, 'running' => $running];
@@ -769,7 +1024,7 @@ function stopProject(string $name): int
         }
         $pid = (int)($state[$key]['pid'] ?? 0);
         if ($pid > 0) {
-            @shell_exec('taskkill /PID ' . $pid . ' /T /F 2>NUL');
+            killProcess($pid);
             unset($state[$key]);
             $stopped++;
         }
@@ -790,7 +1045,7 @@ function logError(string $logFile): ?string
         if ($line === '') {
             continue;
         }
-        if (preg_match('/(error|exception|fatal|cannot|not found|EADDRINUSE|failed)/i', $line)) {
+        if (preg_match('/\b(error|exception|fatal|cannot|not found|EADDRINUSE|failed)\b/i', $line)) {
             return substr($line, 0, 240);
         }
     }
@@ -818,6 +1073,14 @@ function projectInfo(string $name): array
             : null;
         $server['startedAt'] = $running ? (int)($state[$key]['started'] ?? 0) : 0;
         $server['error'] = $running && $server['url'] === null ? logError($log) : null;
+        if ($server['supportsPort']) {
+            $candidatePort = $port > 0 ? $port : (int)$server['defaultPort'];
+            $holder = portInUse($candidatePort, '127.0.0.1');
+            $ours = $holder !== null && $pid > 0 && isProcessTreeMember($holder, $pid);
+            $server['portBusy'] = ($holder !== null && !$ours) ? $holder : null;
+        } else {
+            $server['portBusy'] = null;
+        }
         $servers[] = $server;
     }
 
@@ -844,6 +1107,12 @@ function startDetached(string $dir, string $command, string $logFile): int
     } else {
         @file_put_contents($logFile, '');
         $inner = $command;
+    }
+
+    if (!isWindows()) {
+        $full = 'cd ' . escapeshellarg($dir) . ' && ( ' . $inner . ' )';
+        $output = @shell_exec('setsid sh -c ' . escapeshellarg($full) . ' > /dev/null 2>&1 & echo $!');
+        return (int)trim((string)$output);
     }
 
     $ps = '$p = Start-Process -FilePath cmd.exe -ArgumentList \'/c\',\'' . $inner
@@ -876,12 +1145,25 @@ function startServer(string $name, string $id, ?int $port = null, string $host =
         if ($port < 1 || $port > 65535) {
             throw new RuntimeException('Puerto invalido (usa 1-65535)');
         }
+        $state = loadState();
+        $key = $name . '::' . $id;
+        $ownPid = (int)($state[$key]['pid'] ?? 0);
+        $holder = portInUse($port, $host, true);
+        $ownedByUs = $holder !== null && $ownPid > 0 && isProcessTreeMember($holder, $ownPid);
+        if ($holder !== null && !$ownedByUs) {
+            $ours = $ownPid > 0 && isRunning($ownPid);
+            throw new RuntimeException(
+                'El puerto ' . $port . ' ya esta en uso (PID ' . $holder . ')'
+                . ($ours ? ' y no pertenece a este servidor' : '')
+                . '. Cambia el puerto o deten ese proceso.'
+            );
+        }
     } else {
         $port = 0;
+        $state = loadState();
+        $key = $name . '::' . $id;
     }
 
-    $state = loadState();
-    $key = $name . '::' . $id;
     $pid = (int)($state[$key]['pid'] ?? 0);
     if ($pid > 0 && isRunning($pid)) {
         return $state[$key] + ['already' => true];
@@ -917,8 +1199,7 @@ function stopServer(string $name, string $id): bool
     if ($pid <= 0) {
         return false;
     }
-    @shell_exec('taskkill /PID ' . $pid . ' /T /F 2>NUL');
-    usleep(400000);
+    killProcess($pid);
     unset($state[$key]);
     saveState($state);
     return true;
@@ -931,12 +1212,108 @@ function stopAllServers(): int
     foreach (array_keys($state) as $key) {
         $pid = (int)($state[$key]['pid'] ?? 0);
         if ($pid > 0) {
-            @shell_exec('taskkill /PID ' . $pid . ' /T /F 2>NUL');
+            killProcess($pid);
             $stopped++;
         }
     }
     saveState([]);
     return $stopped;
+}
+
+function logFilePath(string $name, string $id): string
+{
+    return LOG_DIR . DIRECTORY_SEPARATOR . $name . '-' . $id . '.log';
+}
+
+function streamLog(string $name, string $id, int $from = 0): void
+{
+    safeProject($name);
+    $file = logFilePath($name, $id);
+    $isCliServer = PHP_SAPI === 'cli-server';
+
+    header('Content-Type: text/event-stream; charset=utf-8');
+    header('Cache-Control: no-cache, no-transform');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no');
+    @ini_set('zlib.output_compression', '0');
+    if (!$isCliServer) {
+        @set_time_limit(0);
+        ignore_user_abort(true);
+    }
+
+    $emit = static function (string $data, string $event = ''): void {
+        if ($event !== '') {
+            echo 'event: ' . $event . "\n";
+        }
+        foreach (preg_split('/\r\n|\n|\r/', $data) ?: [] as $line) {
+            echo 'data: ' . $line . "\n";
+        }
+        echo "\n";
+        if (ob_get_level() > 0) {
+            @ob_flush();
+        }
+        @flush();
+    };
+
+    clearstatcache(true, $file);
+    $size = is_file($file) ? (int)filesize($file) : 0;
+    if ($from < 0 || $from > $size) {
+        $from = 0;
+        $emit((string)$from, 'reset');
+    }
+
+    $fp = is_file($file) ? @fopen($file, 'rb') : false;
+    if ($fp) {
+        fseek($fp, $from);
+        $chunk = (string)stream_get_contents($fp);
+        $from = ftell($fp);
+        if ($chunk !== '') {
+            $emit($chunk, 'data');
+            $emit((string)$from, 'offset');
+        }
+    }
+
+    if ($isCliServer || !is_resource($fp)) {
+        if (is_resource($fp)) {
+            fclose($fp);
+        }
+        $emit((string)$from, 'eof');
+        return;
+    }
+
+    $deadline = time() + 25;
+    $idle = 0;
+    while (time() < $deadline && !connection_aborted()) {
+        clearstatcache(true, $file);
+        $current = is_file($file) ? (int)filesize($file) : 0;
+        if ($current < $from) {
+            $from = 0;
+            $emit((string)$from, 'reset');
+        }
+        if ($current > $from) {
+            fseek($fp, $from);
+            $chunk = (string)stream_get_contents($fp);
+            $from = ftell($fp);
+            if ($chunk !== '') {
+                $emit($chunk, 'data');
+                $emit((string)$from, 'offset');
+                $idle = 0;
+            }
+        } else {
+            $idle++;
+            if ($idle % 12 === 0) {
+                echo ": ping\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+            }
+        }
+        usleep(450000);
+    }
+
+    fclose($fp);
+    $emit((string)$from, 'eof');
 }
 
 function serverLog(string $name, string $id, int $lines = 80): string
@@ -969,26 +1346,57 @@ function openTarget(string $target, string $value): void
         if (!preg_match('#^https?://#i', $value)) {
             throw new RuntimeException('URL invalida');
         }
-        @shell_exec('start "" "' . $value . '"');
+        if (isWindows()) {
+            @shell_exec('start "" ' . shellQuote($value));
+        } elseif (isMac()) {
+            @shell_exec('open ' . shellQuote($value));
+        } else {
+            @shell_exec('setsid xdg-open ' . shellQuote($value) . ' >/dev/null 2>&1 &');
+        }
         return;
     }
 
     if ($target === 'folder') {
         $path = safeProject($value);
-        @shell_exec('explorer "' . $path . '"');
+        if (isWindows()) {
+            @shell_exec('explorer ' . shellQuote($path));
+        } elseif (isMac()) {
+            @shell_exec('open ' . shellQuote($path));
+        } else {
+            @shell_exec('setsid xdg-open ' . shellQuote($path) . ' >/dev/null 2>&1 &');
+        }
         return;
     }
 
     if ($target === 'terminal') {
         $path = safeProject($value);
-        $cmder = newestGlob('C:\\laragon\\bin\\cmder\\*\\cmder.exe')
-            ?? newestGlob('C:\\laragon\\bin\\cmder\\cmder.exe');
-        if ($cmder !== null && is_file($cmder)) {
-            @shell_exec('start "" "' . $cmder . '" /START "' . $path . '"');
-        } else {
-            @shell_exec('start cmd /K cd /d "' . $path . '"');
+        if (isWindows()) {
+            $cmder = newestGlob('C:\\laragon\\bin\\cmder\\*\\cmder.exe')
+                ?? newestGlob('C:\\laragon\\bin\\cmder\\cmder.exe');
+            if ($cmder !== null && is_file($cmder)) {
+                @shell_exec('start "" ' . shellQuote($cmder) . ' /START ' . shellQuote($path));
+            } else {
+                @shell_exec('start cmd /K cd /d ' . shellQuote($path));
+            }
+            return;
         }
-        return;
+        if (isMac()) {
+            @shell_exec('open -a Terminal ' . shellQuote($path));
+            return;
+        }
+        foreach ([
+            ['gnome-terminal', '--working-directory='],
+            ['konsole', '--workdir '],
+            ['xfce4-terminal', '--working-directory='],
+            ['kitty', '--directory '],
+        ] as [$bin, $flag]) {
+            if (trim((string)@shell_exec('command -v ' . $bin . ' 2>/dev/null')) === '') {
+                continue;
+            }
+            @shell_exec('setsid ' . $bin . ' ' . $flag . shellQuote($path) . ' >/dev/null 2>&1 &');
+            return;
+        }
+        throw new RuntimeException('No se encontro un emulador de terminal instalado');
     }
 
     throw new RuntimeException('Accion no soportada');

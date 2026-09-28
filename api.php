@@ -6,10 +6,10 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'lib.php';
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
-$remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
-if (!in_array($remote, ['127.0.0.1', '::1'], true) && !UPWEB_ALLOW_REMOTE && getenv('UPWEB_ALLOW_REMOTE') !== '1') {
-    http_response_code(403);
-    echo json_encode(['ok' => false, 'error' => 'Solo acceso local']);
+$authError = authError();
+if ($authError !== null) {
+    http_response_code(strpos($authError, 'Token') !== false || strpos($authError, 'token') !== false ? 401 : 403);
+    echo json_encode(['ok' => false, 'error' => $authError], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -68,6 +68,10 @@ try {
         case 'log':
             $data = ['log' => serverLog($project, $id, (int)($_REQUEST['lines'] ?? 80))];
             break;
+
+        case 'stream':
+            streamLog($project, $id, (int)($_REQUEST['from'] ?? 0));
+            exit;
 
         case 'open':
             openTarget((string)($_REQUEST['target'] ?? 'url'), (string)($_REQUEST['value'] ?? ''));

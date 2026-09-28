@@ -1,9 +1,11 @@
 # UpWeb
 
-Panel gráfico local para levantar todos tus proyectos de desarrollo con un clic.
+[Español](README.es.md)
 
-Si tienes muchos proyectos en `www` (Laragon, u otro docroot) y te cansaste de recordar
-qué comando corre en cada uno, este panel los detecta, los lista y los arranca.
+A local web panel that lifts every one of your development projects with a single click.
+
+If you keep dozens of projects in `www` (Laragon or any other docroot) and you are tired of
+remembering which command runs in each one, this panel detects them, lists them and starts them.
 
 ```
 http://localhost/upweb/
@@ -11,109 +13,127 @@ http://localhost/upweb/
 
 ---
 
-## Qué hace
+## Features
 
 | | |
 |---|---|
-| **Levantar en un clic** | Detecta la arquitectura de cada carpeta y arranta los servidores recomendados. |
-| **Estado en vivo** | Punto verde/rojo por servidor, URL detectada desde el log, errores mostrados. |
-| **Cualquier arquitectura** | Laravel, Flutter, Vite, Next, Django, Flask, FastAPI, Rails, Docker, PHP puro. |
-| **Comandos propios** | ¿Tu stack no está detectado? Agregas un comando y queda guardado. |
-| **Puertos configurables** | Eliges el puerto por servidor; se recuerda entre sesiones. |
-| **Servicios del sistema** | Apache, nginx, MySQL, Redis, Node, Docker, Flutter — quién está corriendo. |
-| **Auto-abrir navegador** | Cuando un server queda listo, se abre la pestaña sola. |
+| **One-click lift** | Detects each folder's architecture and starts the recommended servers. |
+| **Live logs** | Server-sent events stream the output in real time, with byte offsets so reconnects never duplicate or lose data. |
+| **Live status** | Green/red dot per server, URL parsed from the log, errors surfaced inline. |
+| **Any architecture** | Laravel, Flutter, Vite, Next, Angular, Nuxt, Astro, Django, Flask, FastAPI, Rails, Docker, plain PHP. |
+| **Port conflicts** | Before starting, it checks whether the port is free and who owns it; conflicting ports are flagged red. |
+| **Favorites & recency** | Star the projects you care about; the list sorts favorites first, then by last use. |
+| **Custom commands** | Stack not detected? Add a command and it is persisted. |
+| **Configurable ports** | You pick the port per server; it is remembered between sessions. |
+| **System services** | Apache, nginx, MySQL, Redis, Node, Docker, Flutter — who is running. |
+| **Auto-open browser** | When a server becomes ready its tab opens by itself. |
+| **Cross-platform** | Windows, macOS and Linux for process, port and log handling. |
 
 ---
 
-## Requisitos
+## Requirements
 
-- Windows (usa `taskkill`, `tasklist`, PowerShell para procesos desprendidos)
 - PHP 8.1+
-- [Laragon](https://laragon.org) (o cualquier docroot; configura `www_root`)
+- Windows, macOS or Linux
+- [Laragon](https://laragon.org) (or any docroot — set `www_root`)
 
-Opcional, según tus proyectos: Node, Composer, Flutter, Python, Docker.
+Optional, depending on your projects: Node, Composer, Flutter, Python, Docker.
 
 ---
 
-## Instalación
+## Installation
 
-1. Copia esta carpeta dentro de tu docroot:
+1. Copy this folder into your docroot:
 
    ```
    C:\laragon\www\upweb
    ```
 
-2. Recarga Laragon (o espera el auto-vhost) y abre:
+2. Reload Laragon (or wait for the auto-vhost) and open:
 
    ```
    http://upweb.test
    ```
 
-   También funciona con `http://localhost/upweb/`.
+   `http://localhost/upweb/` works too.
 
-3. Listo. El panel escanea las carpetas hermanas y muestra cada proyecto con su tarjeta.
+3. Done. The panel scans the sibling folders and shows a card for each project.
 
-### Configuración
+### Configuration
 
-Los valores por defecto auto-detectan Laragon. Si tu instalación es distinta,
-copia `config.local.php.example` a `config.local.php` (está en `.gitignore`) y ajústalo:
+The defaults auto-detect Laragon. If your setup differs, copy
+`config.local.php.example` to `config.local.php` (it is in `.gitignore`) and adjust it:
 
 ```php
 <?php
 return [
-    'www_root'    => 'D:\\htdocs',
-    'laragon_exe' => 'D:\\laragon\\laragon.exe',
+    'www_root'     => 'D:\\htdocs',
+    'laragon_exe'  => 'D:\\laragon\\laragon.exe',
     'flutter_root' => 'C:\\flutter',
     'allow_remote' => false,
+    'auth_token'   => null,
 ];
 ```
 
-| Clave | Descripción | Por defecto |
+| Key | Description | Default |
 |---|---|---|
-| `www_root` | Carpeta que contiene los proyectos | carpeta padre de `upweb` |
-| `laragon_exe` | Ruta a `laragon.exe` | `../laragon.exe` |
-| `flutter_root` | SDK de Flutter (`FLUTTER_ROOT`) | auto-detección |
-| `php_bin` / `npm_bin` / `node_bin` / `composer_phar` | Binarios | auto-detección |
-| `host_suffix` | Sufijo del vhost | `.test` |
-| `allow_remote` | Permitir acceso desde la red local | `false` |
+| `www_root` | Folder that contains the projects | parent folder of `upweb` |
+| `laragon_exe` | Path to `laragon.exe` | `../laragon.exe` |
+| `flutter_root` | Flutter SDK (`FLUTTER_ROOT`) | auto-detection |
+| `php_bin` / `npm_bin` / `node_bin` / `composer_phar` / `python_bin` | Binaries | auto-detection |
+| `host_suffix` | Vhost suffix | `.test` |
+| `hosts_file` | Hosts file used to detect vhosts | Windows hosts file |
+| `allow_remote` | Allow access from the local network | `false` |
+| `auth_token` | Access key | `null` (not required) |
 
-> **Seguridad:** `api.php` solo responde a `127.0.0.1`/`::1` salvo que actives
-> `allow_remote` (o la env var `UPWEB_ALLOW_REMOTE=1`). El panel ejecuta comandos
-> en tu máquina: no lo expongas a internet.
+Every key can also be set as an environment variable (`UPWEB_WWW_ROOT`,
+`UPWEB_LARAGON_EXE`, `UPWEB_PHP_BIN`, `UPWEB_NPM_BIN`, `UPWEB_NODE_BIN`,
+`UPWEB_COMPOSER_PHAR`, `UPWEB_PYTHON_BIN`, `UPWEB_FLUTTER_ROOT`,
+`UPWEB_HOST_SUFFIX`, `UPWEB_HOSTS_FILE`, `UPWEB_ALLOW_REMOTE`,
+`UPWEB_AUTH_TOKEN`). Environment variables win over `config.local.php`.
+
+> **Security:** `api.php` only answers `127.0.0.1`/`::1`. Enabling `allow_remote`
+> (or `UPWEB_ALLOW_REMOTE=1`) also requires a configured `auth_token` — without one
+> remote access stays disabled. When a token is set it is required on **every**
+> request, including local ones, and `index.php` asks for it on a login screen.
+> The panel executes commands on your machine: never expose it to the internet.
 
 ---
 
-## Uso
+## Usage
 
-**Tarjeta de proyecto**
+**Project card**
 
-- **Levantar** — arranca los servidores recomendados para esa arquitectura.
-- **Parar** — detiene todo lo del proyecto (solo aparece si algo corre).
-- **Abrir .test** / **HTTPS** — abre el vhost de Laragon.
-- **Carpeta** / **Terminal** — abre Explorer o Cmder en el proyecto.
-- **+ Cmd** — agrega un comando personalizado.
+- **Lift** — starts the recommended servers for that architecture.
+- **Stop** — stops everything in the project (only shown while something runs).
+- **Star** — marks the project as favorite; favorites sort first and can be
+  isolated with the *Favorites* filter in the header.
+- **Open .test** / **HTTPS** — opens the Laragon vhost.
+- **Folder** / **Terminal** — opens Explorer/Finder or a terminal in the project.
+- **+ Cmd** — adds a custom command.
 
-**Servidor (fila dentro de la tarjeta)**
+**Server row (inside the card)**
 
-- **Iniciar** / **Detener** — control por servidor, con puerto editable.
-- **Log** — salida en vivo del proceso (ahí ves los errores).
+- **Start** / **Stop** — per-server control, with an editable port.
+- **Log** — live process output (that's where you see the errors).
 
 **Header**
 
-- Chips de servicios (Apache, MySQL, Node, ...) con estado.
-- **Laragon:** Iniciar / Reiniciar / Detener.
-- **Auto-abrir** — abre el navegador cuando un server queda listo.
-- **Detener todos los dev** — mata todos los procesos del panel.
+- Service chips (Apache, MySQL, Node, …) with status.
+- **Search** and **Favorites** filter.
+- **Laragon:** Start / Restart / Stop.
+- **Auto-open** — opens the browser when a server is ready.
+- **Stop all dev** — kills every process the panel started.
 
 ---
 
-## Arquitecturas detectadas
+## Detected architectures
 
-| Detección | Runner | Puerto |
+| Detection | Runner | Port |
 |---|---|---|
 | `artisan` | `php artisan serve` | configurable (8000) |
 | `composer.json` → `scripts.dev` | `composer run dev` | auto |
-| `package.json` → `dev`/`start`/`serve` | `npm run <script>` | según framework |
+| `package.json` → `dev`/`start`/`serve` | `npm run <script>` | per framework |
 | `pubspec.yaml` + `lib/main.dart` | `flutter build web && php -S` / `flutter run` | 8080 |
 | `manage.py` | `python manage.py runserver` | 8000 |
 | `main.py` + FastAPI | `uvicorn main:app` | 8000 |
@@ -122,7 +142,7 @@ return [
 | `docker-compose.yml` | `docker compose up` | auto |
 | `index.php` / `index.html` | `php -S` | 8000 |
 
-**Comandos personalizados** aceptan estos tokens:
+**Custom commands** accept these tokens:
 
 ```
 {php} {npm} {flutter} {python} {composer} {host} {port} {log}
@@ -130,58 +150,81 @@ return [
 
 ---
 
-## Estructura
+## Structure
 
 ```
 upweb/
-├── index.php              UI
-├── api.php                JSON API (solo localhost)
-├── lib.php                detección, arranque y parada de procesos
-├── config.php             valores por defecto + auto-detección
+├── index.php              UI shell + auth gate
+├── api.php                JSON API (localhost only)
+├── lib.php                detection, process/port/log handling, SSE
+├── config.php             defaults + env overrides
 ├── config.local.php.example
 ├── assets/
-│   ├── app.js
-│   └── style.css
-└── storage/               runtime (ignorado por git)
-    ├── state.json         PIDs y puertos activos
-    ├── custom.json        comandos personalizados
-    └── logs/              salida de cada servidor
+│   ├── app.js             UI, SSE client, favorites
+│   ├── style.css
+│   └── favicon.svg
+├── tests/
+│   ├── run.php            unit/integration tests (no framework)
+│   ├── auth_case.php      subprocess used by the auth tests
+│   ├── browser-smoke.js   headless-Chrome end-to-end test
+│   └── fixtures/          fake projects per architecture
+└── storage/               runtime (ignored by git)
+    ├── state.json         active PIDs and ports
+    ├── custom.json        custom commands
+    └── logs/              output of every server
 ```
 
 ---
 
 ## API
 
-Todas las respuestas: `{ "ok": true, "data": ... }` o `{ "ok": false, "error": "..." }`.
+All responses: `{ "ok": true, "data": ... }` or `{ "ok": false, "error": "..." }`.
 
-| `action` | Parámetros | Descripción |
+| `action` | Parameters | Description |
 |---|---|---|
-| `list` | — | proyectos + runners + estado |
-| `services` | — | servicios del sistema |
-| `up` | `project` | arranca los runners recomendados |
-| `start` | `project, id, port, host` | arranca un runner |
-| `stop` | `project, id` | detiene un runner |
-| `stop-project` | `project` | detiene todos los del proyecto |
-| `stop-all` | — | detiene todo |
-| `log` | `project, id, lines` | últimas líneas del log |
+| `list` | — | projects + runners + status |
+| `services` | — | system services |
+| `up` | `project` | start the recommended runners |
+| `start` | `project, id, port, host` | start one runner |
+| `stop` | `project, id` | stop one runner |
+| `stop-project` | `project` | stop everything in the project |
+| `stop-all` | — | stop everything |
+| `log` | `project, id, lines` | last lines of the log |
+| `stream` | `project, id, from` | SSE stream of the log from byte offset `from` |
 | `open` | `target, value` | `url` / `folder` / `terminal` |
-| `laragon` | `do=start\|stop\|restart` | controla Laragon |
-| `custom-add` | `project, label, command, port` | guarda comando propio |
-| `custom-remove` | `project, customId` | borra comando propio |
+| `laragon` | `do=start\|stop\|restart` | control Laragon (Windows) |
+| `custom-add` | `project, label, command, port` | save a custom command |
+| `custom-remove` | `project, customId` | delete a custom command |
+
+`stream` emits `data`, `offset` and `eof` events, plus `reset` when the requested
+offset is out of range. Pass `token` as a query parameter when `auth_token` is set
+(`EventSource` cannot send headers).
+
+---
+
+## Testing
+
+```bash
+# Unit + integration tests (detection, ports, process trees, auth)
+php tests/run.php
+
+# End-to-end test in headless Chrome (render, favorites, API, console errors)
+node tests/browser-smoke.js
+```
+
+No test framework is required — `tests/run.php` is a single self-contained script.
 
 ---
 
 ## Roadmap
 
-- [ ] Logs en vivo (SSE) en vez de refresco cada 5 s
-- [ ] Favoritos / orden personalizado de proyectos
-- [ ] Detección de puertos ocupados antes de arrancar
-- [ ] Multi-usuario / acceso desde la red LAN (con token)
-- [ ] Soporte Linux/macOS (sustituir `taskkill`/PowerShell)
-- [ ] Tema claro
+- [ ] Light theme
+- [ ] Per-project environment variable editor
+- [ ] Show who occupies a port with a "kill" shortcut
+- [ ] Windows-only helpers (Laragon control, vhost detection) behind a capability flag
 
 ---
 
-## Licencia
+## License
 
-MIT — ver [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

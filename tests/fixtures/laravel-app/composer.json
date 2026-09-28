@@ -1,0 +1,1 @@
+﻿{"name":"test/laravel","scripts":{"dev":"npm run dev","setup":"php artisan migrate","test":"phpunit"}}

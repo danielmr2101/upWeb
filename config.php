@@ -13,6 +13,7 @@ $auto = [
     'flutter_root' => getenv('FLUTTER_ROOT') ?: null,
     'python_bin' => null,
     'allow_remote' => false,
+    'auth_token' => null,
 ];
 
 $local = [];
@@ -24,4 +25,33 @@ if (is_file($localFile)) {
     }
 }
 
-return array_merge($auto, $local);
+$config = array_merge($auto, $local);
+
+$envMap = [
+    'UPWEB_WWW_ROOT' => 'www_root',
+    'UPWEB_LARAGON_EXE' => 'laragon_exe',
+    'UPWEB_HOST_SUFFIX' => 'host_suffix',
+    'UPWEB_PHP_BIN' => 'php_bin',
+    'UPWEB_NPM_BIN' => 'npm_bin',
+    'UPWEB_NODE_BIN' => 'node_bin',
+    'UPWEB_COMPOSER_PHAR' => 'composer_phar',
+    'UPWEB_PYTHON_BIN' => 'python_bin',
+    'UPWEB_FLUTTER_ROOT' => 'flutter_root',
+    'UPWEB_HOSTS_FILE' => 'hosts_file',
+    'UPWEB_AUTH_TOKEN' => 'auth_token',
+    'UPWEB_ALLOW_REMOTE' => 'allow_remote',
+];
+
+foreach ($envMap as $env => $key) {
+    $value = getenv($env);
+    if ($value === false || $value === '') {
+        continue;
+    }
+    if ($key === 'allow_remote') {
+        $config[$key] = in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
+    } else {
+        $config[$key] = $value;
+    }
+}
+
+return $config;

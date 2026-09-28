@@ -3,11 +3,46 @@ const state = {
     services: [],
     openLogs: new Set(),
     logs: {},
+    logOffsets: {},
+    streams: {},
+    streamTokens: {},
     filter: "",
     busy: new Set(),
     autoOpen: localStorage.getItem("upweb:autoOpen") !== "0",
     openedOnce: new Set(),
+    lastUsed: JSON.parse(localStorage.getItem("upweb:lastUsed") || "{}"),
+    favorites: new Set(JSON.parse(localStorage.getItem("upweb:favorites") || "[]")),
+    favOnly: localStorage.getItem("upweb:favOnly") === "1",
 };
+
+function touch(name) {
+    if (!name) return;
+    state.lastUsed[name] = Date.now();
+    localStorage.setItem("upweb:lastUsed", JSON.stringify(state.lastUsed));
+}
+
+function persistFavorites() {
+    localStorage.setItem("upweb:favorites", JSON.stringify([...state.favorites]));
+}
+
+function toggleFavorite(name) {
+    if (state.favorites.has(name)) state.favorites.delete(name);
+    else state.favorites.add(name);
+    persistFavorites();
+}
+
+function sortProjects(list) {
+    const used = state.lastUsed;
+    return list.slice().sort((a, b) => {
+        const fa = state.favorites.has(a.name) ? 1 : 0;
+        const fb = state.favorites.has(b.name) ? 1 : 0;
+        if (fa !== fb) return fb - fa;
+        const ua = used[a.name] || 0;
+        const ub = used[b.name] || 0;
+        if (ua !== ub) return ub - ua;
+        return a.name.localeCompare(b.name);
+    });
+}
 
 const PALETTE = [
     ["#5b8cff", "#7c5cff"],
@@ -41,8 +76,15 @@ function colorFor(name) {
     return PALETTE[hash % PALETTE.length];
 }
 
+const TOKEN = window.UPWEB_TOKEN || "";
+
+function withToken(params) {
+    if (TOKEN) params.set("token", TOKEN);
+    return params;
+}
+
 async function api(params) {
-    const qs = new URLSearchParams(params).toString();
+    const qs = withToken(new URLSearchParams(params)).toString();
     const res = await fetch("api.php?" + qs, { headers: { "Accept": "application/json" } });
     let json;
     try {
@@ -69,6 +111,76 @@ function key(project, id) {
 
 function isBusy(project, id) {
     return state.busy.has(key(project, id));
+}
+
+function stripAnsi(text) {
+    return String(text).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+function updateLogDom(logId) {
+    const el = document.querySelector(`pre[data-logkey="${CSS.escape(logId)}"]`);
+    if (!el) return;
+    const content = state.logs[logId] || "";
+    el.textContent = stripAnsi(content);
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+}
+
+function closeStream(logId) {
+    const es = state.streams[logId];
+    if (es) {
+        state.streamTokens[logId] = (state.streamTokens[logId] || 0) + 1;
+        es.close();
+        delete state.streams[logId];
+    }
+}
+
+function openLogStream(project, id) {
+    const logId = key(project, id);
+    closeStream(logId);
+    const token = (state.streamTokens[logId] || 0) + 1;
+    state.streamTokens[logId] = token;
+    const alive = () => state.streamTokens[logId] === token && state.openLogs.has(logId);
+
+    const from = state.logOffsets[logId] || 0;
+    const url = `api.php?${withToken(new URLSearchParams({
+        action: "stream", project, id, from
+    })).toString()}`;
+    const es = new EventSource(url);
+    state.streams[logId] = es;
+
+    const scheduleReopen = (delay) => {
+        setTimeout(() => {
+            if (!alive()) return;
+            openLogStream(project, id);
+        }, delay);
+    };
+
+    es.addEventListener("reset", () => {
+        if (!alive()) return;
+        state.logs[logId] = "";
+        state.logOffsets[logId] = 0;
+        updateLogDom(logId);
+    });
+    es.addEventListener("data", (e) => {
+        if (!alive()) return;
+        state.logs[logId] = (state.logs[logId] || "") + e.data;
+        updateLogDom(logId);
+    });
+    es.addEventListener("offset", (e) => {
+        if (!alive()) return;
+        state.logOffsets[logId] = parseInt(e.data, 10) || 0;
+    });
+    es.addEventListener("eof", () => {
+        if (!alive()) return;
+        es.close();
+        scheduleReopen(1200);
+    });
+    es.onerror = () => {
+        if (!alive()) return;
+        es.close();
+        scheduleReopen(2000);
+    };
 }
 
 async function run(fn, project, id, okMessage) {
@@ -112,6 +224,8 @@ function renderServer(project, server) {
         statusHtml = `<span class="error-line" title="${esc(server.error)}">Error: ${esc(server.error)}</span>`;
     } else if (server.running && url) {
         statusHtml = `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>`;
+    } else if (server.portBusy) {
+        statusHtml = `<span class="error-line" title="Puerto ${server.port} ocupado por el PID ${server.portBusy}">Puerto ${server.port} ocupado (PID ${server.portBusy})</span>`;
     } else if (server.running) {
         statusHtml = `<span class="starting">Compilando / iniciando...</span>`;
     } else {
@@ -119,9 +233,9 @@ function renderServer(project, server) {
     }
 
     const portHtml = server.supportsPort
-        ? `<input type="number" class="port" min="1" max="65535" value="${esc(currentPort(project, server))}"
+        ? `<input type="number" class="port ${server.portBusy ? "busy" : ""}" min="1" max="65535" value="${esc(currentPort(project, server))}"
              data-project="${esc(project.name)}" data-id="${esc(server.id)}"
-             title="Puerto" ${server.running ? "disabled" : ""}>`
+             title="${server.portBusy ? "Puerto ocupado por el PID " + server.portBusy : "Puerto"}" ${server.running ? "disabled" : ""}>`
         : `<span class="badge">puerto auto</span>`;
 
     const actionBtn = server.running
@@ -131,7 +245,7 @@ function renderServer(project, server) {
     const logId = key(project.name, server.id);
     const logOpen = state.openLogs.has(logId);
     const logHtml = logOpen
-        ? `<pre class="log">${esc(state.logs[logId] || "Sin salida todavia...")}</pre>`
+        ? `<pre class="log" data-logkey="${esc(logId)}">${esc(stripAnsi(state.logs[logId] || "Sin salida todavia..."))}</pre>`
         : "";
 
     const removeBtn = server.custom
@@ -170,6 +284,7 @@ function renderCard(project) {
         ? `<div class="servers">${project.servers.map((s) => renderServer(project, s)).join("")}</div>`
         : `<div class="no-servers">Sin dev server detectado. Usa "Abrir .test" servido por Laragon/Apache.</div>`;
 
+    const isFav = state.favorites.has(project.name);
     return `
         <article class="card ${project.isSelf ? "self" : ""}">
             <div class="card-head">
@@ -178,13 +293,16 @@ function renderCard(project) {
                     <h2>${esc(project.name)}</h2>
                     <div class="path">${esc(project.path)}</div>
                 </div>
+                <button class="fav ${isFav ? "on" : ""}" data-action="fav" data-project="${esc(project.name)}"
+                        title="${isFav ? "Quitar de favoritos" : "Marcar como favorito"}"
+                        aria-label="${isFav ? "Quitar de favoritos" : "Marcar como favorito"}">&#9733;</button>
             </div>
             <div class="badges">${badges.join("")}</div>
             <div class="card-actions">
                 <button class="btn small primary" data-action="up" data-project="${esc(project.name)}">Levantar</button>
                 ${anyRunning ? `<button class="btn small danger" data-action="stop-project" data-project="${esc(project.name)}">Parar</button>` : ""}
-                <button class="btn small ghost" data-action="open" data-url="${esc(project.prettyUrl)}">Abrir .test</button>
-                <button class="btn small ghost" data-action="open" data-url="${esc(project.prettyUrlHttps)}">HTTPS</button>
+                <button class="btn small ghost" data-action="open" data-project="${esc(project.name)}" data-url="${esc(project.prettyUrl)}">Abrir .test</button>
+                <button class="btn small ghost" data-action="open" data-project="${esc(project.name)}" data-url="${esc(project.prettyUrlHttps)}">HTTPS</button>
                 <button class="btn small ghost" data-action="folder" data-project="${esc(project.name)}">Carpeta</button>
                 <button class="btn small ghost" data-action="terminal" data-project="${esc(project.name)}">Terminal</button>
                 <button class="btn small ghost" data-action="custom-add" data-project="${esc(project.name)}" title="Agregar comando personalizado">+ Cmd</button>
@@ -204,10 +322,15 @@ function renderServices() {
 function render() {
     const grid = document.getElementById("grid");
     const filter = state.filter.toLowerCase();
-    const visible = state.projects.filter((p) => p.name.toLowerCase().includes(filter));
+    let visible = state.projects.filter((p) => p.name.toLowerCase().includes(filter));
+    if (state.favOnly) visible = visible.filter((p) => state.favorites.has(p.name));
+    visible = sortProjects(visible);
 
     grid.innerHTML = visible.map(renderCard).join("");
     document.getElementById("empty").hidden = visible.length > 0;
+    document.getElementById("empty").textContent = state.favOnly && !visible.length
+        ? "No hay favoritos marcados."
+        : "No se encontraron proyectos.";
     renderServices();
 }
 
@@ -232,16 +355,6 @@ async function refresh() {
         for (const p of state.projects) {
             for (const s of p.servers) maybeAutoOpen(p, s);
         }
-        for (const logId of state.openLogs) {
-            const [project, id] = logId.split("::");
-            try {
-                const data = await api({ action: "log", project, id, lines: 80 });
-                state.logs[logId] = data.log || "Sin salida todavia...";
-            } catch (e) {
-                state.logs[logId] = "No se pudo leer el log: " + e.message;
-            }
-        }
-        if (state.openLogs.size) render();
     } catch (e) {
         toast("No se pudo cargar la lista: " + e.message, "err");
     }
@@ -255,16 +368,25 @@ document.getElementById("grid").addEventListener("click", (event) => {
     const id = btn.dataset.id;
 
     if (action === "open") {
+        touch(project);
         window.open(btn.dataset.url, "_blank", "noopener");
         return;
     }
 
+    if (action === "fav") {
+        toggleFavorite(project);
+        render();
+        return;
+    }
+
     if (action === "folder" || action === "terminal") {
+        touch(project);
         run(() => api({ action: "open", target: action, value: project }), project, "", null);
         return;
     }
 
     if (action === "start") {
+        touch(project);
         const row = btn.closest(".server");
         const portInput = row ? row.querySelector(".port") : null;
         const port = portInput ? portInput.value.trim() : "";
@@ -280,6 +402,7 @@ document.getElementById("grid").addEventListener("click", (event) => {
     }
 
     if (action === "up") {
+        touch(project);
         state.openedOnce.clear();
         run(() => api({ action: "up", project }), project, "up", `Levantando ${project}...`);
         return;
@@ -310,14 +433,14 @@ document.getElementById("grid").addEventListener("click", (event) => {
         const logId = key(project, id);
         if (state.openLogs.has(logId)) {
             state.openLogs.delete(logId);
+            closeStream(logId);
             render();
         } else {
             state.openLogs.add(logId);
-            state.logs[logId] = "Cargando...";
+            state.logs[logId] = "";
+            state.logOffsets[logId] = 0;
             render();
-            api({ action: "log", project, id, lines: 80 })
-                .then((data) => { state.logs[logId] = data.log || "Sin salida todavia..."; render(); })
-                .catch((e) => { state.logs[logId] = "Error: " + e.message; render(); });
+            openLogStream(project, id);
         }
     }
 });
@@ -350,6 +473,14 @@ document.getElementById("auto-open").addEventListener("change", (event) => {
 });
 
 document.getElementById("auto-open").checked = state.autoOpen;
+
+document.getElementById("fav-only").addEventListener("change", (event) => {
+    state.favOnly = event.target.checked;
+    localStorage.setItem("upweb:favOnly", state.favOnly ? "1" : "0");
+    render();
+});
+
+document.getElementById("fav-only").checked = state.favOnly;
 
 refresh();
 setInterval(refresh, 5000);

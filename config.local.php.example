@@ -1,9 +1,43 @@
 <?php
 declare(strict_types=1);
 
+/*
+ * Copia este archivo como config.local.php y ajusta lo que necesites.
+ * config.local.php esta en .gitignore: tus valores locales no se suben a Git.
+ *
+ * Todas las opciones también se pueden definir como variables de entorno:
+ *   UPWEB_WWW_ROOT, UPWEB_LARAGON_EXE, UPWEB_PHP_BIN, UPWEB_NPM_BIN,
+ *   UPWEB_NODE_BIN, UPWEB_COMPOSER_PHAR, UPWEB_PYTHON_BIN, UPWEB_FLUTTER_ROOT,
+ *   UPWEB_HOST_SUFFIX, UPWEB_HOSTS_FILE, UPWEB_ALLOW_REMOTE, UPWEB_AUTH_TOKEN
+ * Las variables de entorno tienen prioridad sobre este archivo.
+ */
+
 return [
+    // Carpeta que se escanea en busca de proyectos.
     'www_root' => 'C:\\laragon\\www',
+
+    // Ejecutable de Laragon (para los botones Iniciar / Reiniciar / Detener).
     'laragon_exe' => 'C:\\laragon\\laragon.exe',
+
+    // Sufijo de host para los dominios .test de Laragon.
+    'host_suffix' => '.test',
+
+    // Archivo hosts que se consulta para saber si el vhost ya existe.
+    // 'hosts_file' => 'C:\\Windows\\System32\\drivers\\etc\\hosts',
+
+    // Binarios. null = autodeteccion.
+    'php_bin' => null,
+    'npm_bin' => null,
+    'node_bin' => null,
+    'composer_phar' => null,
+    'python_bin' => null,
     'flutter_root' => 'C:\\flutter',
+
+    // Acceso desde otras maquinas de la red.
+    // Requiere ademas un 'auth_token' para poder activarse.
     'allow_remote' => false,
+
+    // Clave de acceso. Si esta configurada es obligatoria para TODAS las
+    // peticiones (tambien desde 127.0.0.1). Dejala en null para no exigirla.
+    'auth_token' => null,
 ];

@@ -3,6 +3,9 @@ storage/*
 
 config.local.php
 
+tests/tmp/
+
 *.log
 .DS_Store
 Thumbs.db
+node_modules/
