@@ -205,8 +205,13 @@ ok(count($names) > 10, 'lista procesos del sistema', 'n=' . count($names));
 ok(in_array('php.exe', $names, true) || in_array('php', $names, true), 'incluye el proceso php actual');
 
 echo "== shellQuote ==\n";
-eq('"C:\\ruta con espacios"', shellQuote('C:\\ruta con espacios'), 'windows envuelve en comillas dobles');
-ok(strpos(shellQuote('a"b'), '""') !== false, 'windows escapa comillas dobles');
+if (isWindows()) {
+    eq('"C:\\ruta con espacios"', shellQuote('C:\\ruta con espacios'), 'windows envuelve en comillas dobles');
+    ok(strpos(shellQuote('a"b'), '""') !== false, 'windows escapa comillas dobles');
+} else {
+    eq("'C:\\ruta con espacios'", shellQuote('C:\\ruta con espacios'), 'unix envuelve en comillas simples');
+    ok(strpos(shellQuote("a'b"), "'\\''") !== false, "unix escapa comillas simples");
+}
 
 echo "== authError ==\n";
 function authCase(string $remote, string $provided, string $configToken, string $allowRemote): string

@@ -216,16 +216,22 @@ function currentPort(project, server) {
     return server.port != null ? String(server.port) : "";
 }
 
+function portBusyText(server) {
+    if (server.portBusy === null || server.portBusy === undefined) return null;
+    return server.portBusy > 0 ? "PID " + server.portBusy : "PID no disponible";
+}
+
 function renderServer(project, server) {
     const busy = isBusy(project.name, server.id);
     const url = server.url;
+    const portOwner = portBusyText(server);
     let statusHtml;
     if (server.error) {
         statusHtml = `<span class="error-line" title="${esc(server.error)}">Error: ${esc(server.error)}</span>`;
     } else if (server.running && url) {
         statusHtml = `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>`;
-    } else if (server.portBusy) {
-        statusHtml = `<span class="error-line" title="Puerto ${server.port} ocupado por el PID ${server.portBusy}">Puerto ${server.port} ocupado (PID ${server.portBusy})</span>`;
+    } else if (portOwner) {
+        statusHtml = `<span class="error-line" title="Puerto ${server.port} ocupado por ${esc(portOwner)}">Puerto ${server.port} ocupado (${esc(portOwner)})</span>`;
     } else if (server.running) {
         statusHtml = `<span class="starting">Compilando / iniciando...</span>`;
     } else {
@@ -233,9 +239,9 @@ function renderServer(project, server) {
     }
 
     const portHtml = server.supportsPort
-        ? `<input type="number" class="port ${server.portBusy ? "busy" : ""}" min="1" max="65535" value="${esc(currentPort(project, server))}"
+        ? `<input type="number" class="port ${portOwner ? "busy" : ""}" min="1" max="65535" value="${esc(currentPort(project, server))}"
              data-project="${esc(project.name)}" data-id="${esc(server.id)}"
-             title="${server.portBusy ? "Puerto ocupado por el PID " + server.portBusy : "Puerto"}" ${server.running ? "disabled" : ""}>`
+             title="${portOwner ? "Puerto ocupado por " + esc(portOwner) : "Puerto"}" ${server.running ? "disabled" : ""}>`
         : `<span class="badge">puerto auto</span>`;
 
     const actionBtn = server.running

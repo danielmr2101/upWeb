@@ -631,37 +631,78 @@ function isProcessTreeMember(int $pid, int $root, bool $refresh = false): bool
     return false;
 }
 
+function portRows(bool $refresh = false): array
+{
+    static $cache = null;
+    if ($cache !== null && !$refresh) {
+        return $cache;
+    }
+    $rows = [];
+
+    if (isWindows()) {
+        $out = (string)@shell_exec('netstat -ano -p tcp 2>NUL');
+        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+            if (preg_match('/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)/i', $line, $m)) {
+                $rows[] = [trim($m[1], '[]'), (int)$m[2], (int)$m[3]];
+            }
+        }
+    } else {
+        $out = isMac()
+            ? (string)@shell_exec('netstat -anv -p tcp 2>/dev/null || true')
+            : (string)@shell_exec('ss -ltnpH 2>/dev/null || netstat -ltnp 2>/dev/null || true');
+        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $addr = null;
+            $port = 0;
+            // ss:   LISTEN 0 511 127.0.0.1:8000 0.0.0.0:* users:(("php",pid=123,fd=6))
+            // net:  tcp 0 0 127.0.0.1:8000 0.0.0.0:* LISTEN 1234/php
+            if (preg_match('/^LISTEN\s+\d+\s+\d+\s+(\S+):(\d+)\s/', $line, $m)
+                || preg_match('/^tcp\S*\s+\d+\s+\d+\s+(\S+):(\d+)\s+\S+\s+LISTEN\b/', $line, $m)
+                // macOS: tcp4 0 0 127.0.0.1.8000 *.* LISTEN 131072 131072 1234
+                || preg_match('/^tcp[46]\s+\d+\s+\d+\s+(\S+)\.(\d+)\s+\S+\s+LISTEN\b/', $line, $m)) {
+                $addr = trim($m[1], '[]');
+                $port = (int)$m[2];
+            }
+            if ($addr === null || $port < 1 || $port > 65535) {
+                continue;
+            }
+            $pid = 0;
+            if (preg_match('/pid=(\d+)/', $line, $pm)) {
+                $pid = (int)$pm[1];
+            } elseif (preg_match('/\s(\d+)\/\S+\s*$/', $line, $pm)) {
+                $pid = (int)$pm[1];
+            } elseif (preg_match('/\bLISTEN\b.*\s(\d+)\s*$/', $line, $pm)) {
+                $pid = (int)$pm[1];
+            }
+            $rows[] = [$addr, $port, $pid];
+        }
+    }
+
+    $cache = $rows;
+    return $rows;
+}
+
+/**
+ * Devuelve el PID que escucha en $port, 0 si esta ocupado por un proceso cuyo
+ * PID no se pudo determinar, o null si el puerto esta libre.
+ */
 function portInUse(int $port, string $host = '127.0.0.1', bool $refresh = false): ?int
 {
     if ($port < 1 || $port > 65535) {
         return null;
     }
-    static $cache = null;
-    if ($cache === null || $refresh) {
-        if (isWindows()) {
-            $out = (string)@shell_exec('netstat -ano -p tcp 2>NUL');
-        } else {
-            $out = (string)@shell_exec('netstat -ano -p tcp 2>/dev/null || true');
-        }
-        $rows = [];
-        foreach (preg_split('/\r\n|\n|\r/', $out) ?: [] as $line) {
-            if (preg_match('/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)/i', $line, $m)) {
-                $rows[] = [(string)$m[1], (int)$m[2], (int)$m[3]];
-            }
-        }
-        $cache = $rows;
-    }
-
-    foreach ($cache as [$addr, $p, $pid]) {
+    $anyHost = $host === '0.0.0.0' || $host === '::';
+    foreach (portRows($refresh) as [$addr, $p, $pid]) {
         if ($p !== $port) {
             continue;
         }
-        if ($host === '0.0.0.0') {
-            return $pid;
+        if (!$anyHost && !in_array($addr, ['127.0.0.1', '::1', '::', '0.0.0.0'], true)) {
+            continue;
         }
-        if ($addr === '127.0.0.1' || $addr === '::1' || $addr === '::') {
-            return $pid;
-        }
+        return $pid > 0 ? $pid : 0;
     }
     return null;
 }
@@ -1076,7 +1117,7 @@ function projectInfo(string $name): array
         if ($server['supportsPort']) {
             $candidatePort = $port > 0 ? $port : (int)$server['defaultPort'];
             $holder = portInUse($candidatePort, '127.0.0.1');
-            $ours = $holder !== null && $pid > 0 && isProcessTreeMember($holder, $pid);
+            $ours = $holder !== null && $holder > 0 && $pid > 0 && isProcessTreeMember($holder, $pid);
             $server['portBusy'] = ($holder !== null && !$ours) ? $holder : null;
         } else {
             $server['portBusy'] = null;
@@ -1149,11 +1190,12 @@ function startServer(string $name, string $id, ?int $port = null, string $host =
         $key = $name . '::' . $id;
         $ownPid = (int)($state[$key]['pid'] ?? 0);
         $holder = portInUse($port, $host, true);
-        $ownedByUs = $holder !== null && $ownPid > 0 && isProcessTreeMember($holder, $ownPid);
+        $ownedByUs = $holder !== null && $holder > 0 && $ownPid > 0 && isProcessTreeMember($holder, $ownPid);
         if ($holder !== null && !$ownedByUs) {
             $ours = $ownPid > 0 && isRunning($ownPid);
             throw new RuntimeException(
-                'El puerto ' . $port . ' ya esta en uso (PID ' . $holder . ')'
+                'El puerto ' . $port . ' ya esta en uso'
+                . ($holder > 0 ? ' (PID ' . $holder . ')' : ' (PID no disponible)')
                 . ($ours ? ' y no pertenece a este servidor' : '')
                 . '. Cambia el puerto o deten ese proceso.'
             );

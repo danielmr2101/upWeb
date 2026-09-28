@@ -1,0 +1,14 @@
+# Normaliza el fin de línea: LF dentro del repositorio y en el checkout,
+# igual en Windows, macOS y Linux. Evita churn de CRLF/LF entre colaborores.
+* text=auto eol=lf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.ttf binary

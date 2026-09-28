@@ -1,5 +1,6 @@
 # UpWeb
 
+[![CI](https://github.com/danielmr2101/upWeb/actions/workflows/ci.yml/badge.svg)](https://github.com/danielmr2101/upWeb/actions/workflows/ci.yml)
 [Español](README.es.md)
 
 A local web panel that lifts every one of your development projects with a single click.
@@ -154,6 +155,8 @@ Every key can also be set as an environment variable (`UPWEB_WWW_ROOT`,
 
 ```
 upweb/
+├── .github/workflows/ci.yml   CI: tests on Linux, Windows and macOS + browser smoke test
+├── .gitattributes             normalizes line endings to LF
 ├── index.php              UI shell + auth gate
 ├── api.php                JSON API (localhost only)
 ├── lib.php                detection, process/port/log handling, SSE
@@ -213,6 +216,17 @@ node tests/browser-smoke.js
 ```
 
 No test framework is required — `tests/run.php` is a single self-contained script.
+
+Both run on every push through GitHub Actions: the first job on **Linux,
+Windows and macOS**, the second on Linux with headless Chrome.
+
+Environment variables used by `tests/browser-smoke.js`:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `PHP_BIN` | PHP executable used to serve the panel | Laragon PHP, then `php` from `PATH` |
+| `CHROME_BIN` / `CHROME_PATH` | Chrome/Chromium executable | common install paths, then `PATH` |
+| `SMOKE_PORT` / `SMOKE_CDP_PORT` | Ports for the panel and the DevTools protocol | `9114` / `9333` |
 
 ---
 

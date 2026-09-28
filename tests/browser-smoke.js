@@ -4,14 +4,50 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 
-const PHP = process.env.PHP_BIN || "C:/laragon/bin/php/php-8.3.30-Win32-vs16-x64/php.exe";
-const CHROME = [
+const DEFAULT_WIN_PHP = "C:/laragon/bin/php/php-8.3.30-Win32-vs16-x64/php.exe";
+const CHROME_CANDIDATES = [
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-].find((p) => fs.existsSync(p));
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+];
+
+function resolveBin(envKey, candidates, fallback) {
+    const fromEnv = process.env[envKey];
+    if (fromEnv) return fromEnv;
+    const found = candidates.find((p) => fs.existsSync(p));
+    if (found) return found;
+    return fallback;
+}
+
+function findOnPath(names) {
+    const cmd = process.platform === "win32" ? "where" : "which";
+    for (const name of names) {
+        try {
+            const out = require("child_process")
+                .execSync(`${cmd} ${name}`, { stdio: ["ignore", "pipe", "ignore"] })
+                .toString()
+                .split(/\r?\n/)[0]
+                .trim();
+            if (out) return out;
+        } catch (e) {}
+    }
+    return null;
+}
+
+const PHP = resolveBin("PHP_BIN", [DEFAULT_WIN_PHP], null) || findOnPath(["php", "php8.3", "php8.2"]);
+const CHROME =
+    resolveBin("CHROME_BIN", CHROME_CANDIDATES, null) ||
+    resolveBin("CHROME_PATH", CHROME_CANDIDATES, null) ||
+    findOnPath(["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"]);
+
+const PORT = process.env.SMOKE_PORT || "9114";
+const CDP_PORT = process.env.SMOKE_CDP_PORT || "9333";
 const ROOT = path.resolve(__dirname, "..");
-const PAGE = "http://127.0.0.1:9114/";
-const CDP_PORT = 9333;
+const PAGE = "http://127.0.0.1:" + PORT + "/";
 const USER_DATA = path.join(os.tmpdir(), "upweb-smoke-" + Date.now());
 
 const children = [];
@@ -74,27 +110,36 @@ function check(label, ok, detail) {
 }
 
 (async () => {
+    if (!PHP) {
+        console.log("  skip: no se encontro PHP (define PHP_BIN o instala php en el PATH)");
+        process.exit(0);
+    }
     if (!CHROME) {
-        console.log("  skip: no se encontro Chrome");
+        console.log("  skip: no se encontro Chrome (define CHROME_BIN)");
         process.exit(0);
     }
 
-    const php = spawn(PHP, ["-S", "127.0.0.1:9114", "-t", ROOT], { stdio: "ignore" });
+    const php = spawn(PHP, ["-S", "127.0.0.1:" + PORT, "-t", ROOT], { stdio: "ignore" });
     children.push(php);
     await waitFor(async () => {
         const b = await get(PAGE);
         return b.includes('id="grid"');
     }, 10000, "servidor PHP");
 
-    const chrome = spawn(CHROME, [
+    const chromeArgs = [
         "--headless=new",
         "--disable-gpu",
+        "--disable-dev-shm-usage",
         "--no-first-run",
         "--no-default-browser-check",
         "--remote-debugging-port=" + CDP_PORT,
         "--user-data-dir=" + USER_DATA,
         "about:blank",
-    ], { stdio: "ignore" });
+    ];
+    if (process.env.CI || process.platform === "linux") {
+        chromeArgs.unshift("--no-sandbox");
+    }
+    const chrome = spawn(CHROME, chromeArgs, { stdio: "ignore" });
     children.push(chrome);
 
     const targets = await waitFor(async () => {
