@@ -1,0 +1,9 @@
+<?php
+declare(strict_types=1);
+
+return [
+    'www_root' => 'C:\\laragon\\www',
+    'laragon_exe' => 'C:\\laragon\\laragon.exe',
+    'flutter_root' => 'C:\\flutter',
+    'allow_remote' => false,
+];
