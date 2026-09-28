@@ -12,6 +12,11 @@ qué comando corre en cada uno, este panel los detecta, los lista y los arranca.
 http://localhost/upweb/
 ```
 
+![Panel de UpWeb](docs/screenshot.png)
+
+> La imagen de arriba es un placeholder: abre el panel, haz una captura y
+> sobrescribe `docs/screenshot.png` — no hay que tocar el README.
+
 ---
 
 ## Qué hace
@@ -166,6 +171,8 @@ upweb/
 │   ├── app.js             UI, cliente SSE, favoritos
 │   ├── style.css
 │   └── favicon.svg
+├── docs/
+│   └── screenshot.png     Captura del README (placeholder hasta que la reemplaces)
 ├── tests/
 │   ├── run.php            Tests unitarios/integración (sin framework)
 │   ├── auth_case.php      Subproceso usado por los tests de autenticación

@@ -12,6 +12,11 @@ remembering which command runs in each one, this panel detects them, lists them 
 http://localhost/upweb/
 ```
 
+![UpWeb panel](docs/screenshot.png)
+
+> The image above is a placeholder: open the panel, take a screenshot and
+> overwrite `docs/screenshot.png` — no README change needed.
+
 ---
 
 ## Features
@@ -166,6 +171,8 @@ upweb/
 │   ├── app.js             UI, SSE client, favorites
 │   ├── style.css
 │   └── favicon.svg
+├── docs/
+│   └── screenshot.png     README screenshot (placeholder until replaced)
 ├── tests/
 │   ├── run.php            unit/integration tests (no framework)
 │   ├── auth_case.php      subprocess used by the auth tests
